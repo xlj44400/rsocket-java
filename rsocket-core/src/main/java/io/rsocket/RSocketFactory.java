@@ -102,6 +102,8 @@ public class RSocketFactory {
     private Duration tickPeriod = Duration.ofSeconds(20);
     private Duration ackTimeout = Duration.ofSeconds(30);
     private int missedAcks = 3;
+    private int receivedFramesAsKeepAliveCount = 10_000;
+    private boolean receivedFramesAsKeepAliveEnabled;
 
     private String metadataMimeType = "application/binary";
     private String dataMimeType = "application/binary";
@@ -170,6 +172,26 @@ public class RSocketFactory {
 
     public ClientRSocketFactory keepAliveMissedAcks(int missedAcks) {
       this.missedAcks = missedAcks;
+      return this;
+    }
+
+    /**
+     * received non-keep-alive frames are considered as keep-alive signal
+     *
+     * @return this ClientRSocketFactory
+     */
+    public ClientRSocketFactory receivedFramesAsKeepAlive() {
+      this.receivedFramesAsKeepAliveEnabled = true;
+      return this;
+    }
+
+    /**
+     * @param receivedFramesCount number of received non-keep-alive frames considered as one
+     *     keep-alive signal
+     * @return this ClientRSocketFactory
+     */
+    public ClientRSocketFactory receivedFramesAsKeepAliveCount(int receivedFramesCount) {
+      this.receivedFramesAsKeepAliveCount = receivedFramesCount;
       return this;
     }
 
@@ -352,6 +374,9 @@ public class RSocketFactory {
                         allocator,
                         connection,
                         notUsed -> new KeepAliveData(keepAliveTickPeriod(), keepAliveTimeout()),
+                        receivedFramesAsKeepAliveEnabled
+                            ? Math.max(0, receivedFramesAsKeepAliveCount)
+                            : 0,
                         errorConsumer));
       }
     }
@@ -371,6 +396,8 @@ public class RSocketFactory {
 
     private ByteBufAllocator allocator = ByteBufAllocator.DEFAULT;
     private boolean resumeCleanupStoreOnKeepAlive;
+    private int receivedFramesAsKeepAliveCount = 10_000;
+    private boolean receivedFramesAsKeepAliveEnabled;
 
     private ServerRSocketFactory() {}
 
@@ -441,6 +468,26 @@ public class RSocketFactory {
       return this;
     }
 
+    /**
+     * received non-keep-alive frames are considered as keep-alive signal
+     *
+     * @return this ServerRSocketFactory
+     */
+    public ServerRSocketFactory receivedFramesAsKeepAlive() {
+      this.receivedFramesAsKeepAliveEnabled = true;
+      return this;
+    }
+
+    /**
+     * @param receivedFramesCount number of received non-keep-alive frames considered as one
+     *     keep-alive signal. disabled if set to 0.
+     * @return this ServerRSocketFactory
+     */
+    public ServerRSocketFactory receivedFramesAsKeepAliveCount(int receivedFramesCount) {
+      this.receivedFramesAsKeepAliveCount = receivedFramesCount;
+      return this;
+    }
+
     private class ServerStart<T extends Closeable> implements Start<T>, ServerTransportAcceptor {
       private Supplier<ServerTransport<T>> transportServer;
 
@@ -466,7 +513,11 @@ public class RSocketFactory {
       private Mono<Void> acceptor(ServerSetup serverSetup, DuplexConnection connection) {
         connection =
             KeepAliveConnection.ofServer(
-                allocator, connection, serverSetup::keepAliveData, errorConsumer);
+                allocator,
+                connection,
+                serverSetup::keepAliveData,
+                receivedFramesAsKeepAliveEnabled ? Math.max(0, receivedFramesAsKeepAliveCount) : 0,
+                errorConsumer);
         ClientServerInputMultiplexer multiplexer =
             new ClientServerInputMultiplexer(connection, plugins);
 

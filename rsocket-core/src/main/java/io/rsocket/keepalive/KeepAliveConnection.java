@@ -45,39 +45,55 @@ public class KeepAliveConnection extends DuplexConnectionProxy
   private final Function3<ByteBufAllocator, Duration, Duration, KeepAliveHandler>
       keepAliveHandlerFactory;
   private final Consumer<Throwable> errorConsumer;
+  private final int receivedFramesAsKeepAliveCount;
   private volatile KeepAliveHandler keepAliveHandler;
   private volatile ResumeStateHolder resumeStateHolder;
   private volatile boolean keepAliveHandlerStarted;
+  private long receivedFrames;
 
   public static KeepAliveConnection ofClient(
       ByteBufAllocator allocator,
       DuplexConnection duplexConnection,
       Function<ByteBuf, KeepAliveData> keepAliveData,
+      int receivedFramesAsKeepAliveCount,
       Consumer<Throwable> errorConsumer) {
 
     return new KeepAliveConnection(
-        allocator, duplexConnection, keepAliveData, KeepAliveHandler::ofClient, errorConsumer);
+        allocator,
+        duplexConnection,
+        keepAliveData,
+        receivedFramesAsKeepAliveCount,
+        KeepAliveHandler::ofClient,
+        errorConsumer);
   }
 
   public static KeepAliveConnection ofServer(
       ByteBufAllocator allocator,
       DuplexConnection duplexConnection,
       Function<ByteBuf, KeepAliveData> keepAliveData,
+      int receivedFramesAsKeepAliveCount,
       Consumer<Throwable> errorConsumer) {
 
     return new KeepAliveConnection(
-        allocator, duplexConnection, keepAliveData, KeepAliveHandler::ofServer, errorConsumer);
+        allocator,
+        duplexConnection,
+        keepAliveData,
+        receivedFramesAsKeepAliveCount,
+        KeepAliveHandler::ofServer,
+        errorConsumer);
   }
 
-  private KeepAliveConnection(
+  KeepAliveConnection(
       ByteBufAllocator allocator,
       DuplexConnection duplexConnection,
       Function<ByteBuf, KeepAliveData> keepAliveData,
+      int receivedFramesAsKeepAliveCount,
       Function3<ByteBufAllocator, Duration, Duration, KeepAliveHandler> keepAliveHandlerFactory,
       Consumer<Throwable> errorConsumer) {
     super(duplexConnection);
     this.allocator = allocator;
     this.keepAliveData = keepAliveData;
+    this.receivedFramesAsKeepAliveCount = receivedFramesAsKeepAliveCount;
     this.keepAliveHandlerFactory = keepAliveHandlerFactory;
     this.errorConsumer = errorConsumer;
     keepAliveHandlerReady.subscribe(this::startKeepAlives);
@@ -111,7 +127,8 @@ public class KeepAliveConnection extends DuplexConnectionProxy
     return super.receive()
         .doOnNext(
             f -> {
-              if (isKeepAliveFrame(f)) {
+              boolean isKeepAlive = isKeepAliveFrame(f);
+              if (isKeepAlive) {
                 long receivedPos = keepAliveHandler.receive(f);
                 if (receivedPos > 0) {
                   ResumeStateHolder h = this.resumeStateHolder;
@@ -121,6 +138,18 @@ public class KeepAliveConnection extends DuplexConnectionProxy
                 }
               } else {
                 startKeepAliveHandlerOnce(f);
+              }
+
+              if (receivedFramesAsKeepAliveCount > 0) {
+                if (isKeepAlive) {
+                  receivedFrames = 0;
+                } else {
+                  receivedFrames++;
+                  if (receivedFrames == receivedFramesAsKeepAliveCount) {
+                    receivedFrames = 0;
+                    keepAliveHandler.receive();
+                  }
+                }
               }
             });
   }

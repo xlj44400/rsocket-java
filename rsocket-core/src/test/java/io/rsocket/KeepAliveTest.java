@@ -21,10 +21,7 @@ import io.netty.buffer.ByteBufAllocator;
 import io.netty.buffer.Unpooled;
 import io.netty.util.ReferenceCountUtil;
 import io.rsocket.exceptions.ConnectionErrorException;
-import io.rsocket.frame.FrameHeaderFlyweight;
-import io.rsocket.frame.FrameType;
-import io.rsocket.frame.KeepAliveFrameFlyweight;
-import io.rsocket.frame.SetupFrameFlyweight;
+import io.rsocket.frame.*;
 import io.rsocket.internal.KeepAliveData;
 import io.rsocket.keepalive.KeepAliveConnection;
 import io.rsocket.resume.ResumeStateHolder;
@@ -46,6 +43,7 @@ import reactor.core.publisher.Mono;
 public class KeepAliveTest {
   private static final int TICK_PERIOD = 100;
   private static final int TIMEOUT = 700;
+  private static final int RECEIVED_FRAMES_AS_KEEP_ALIVE_COUNT = 3;
 
   private TestDuplexConnection testConnection;
   private Function<ByteBuf, KeepAliveData> timingsProvider;
@@ -65,9 +63,19 @@ public class KeepAliveTest {
     errorConsumer = errors::add;
 
     clientConnection =
-        KeepAliveConnection.ofClient(allocator, testConnection, timingsProvider, errorConsumer);
+        KeepAliveConnection.ofClient(
+            allocator,
+            testConnection,
+            timingsProvider,
+            RECEIVED_FRAMES_AS_KEEP_ALIVE_COUNT,
+            errorConsumer);
     serverConnection =
-        KeepAliveConnection.ofServer(allocator, testConnection, timingsProvider, errorConsumer);
+        KeepAliveConnection.ofServer(
+            allocator,
+            testConnection,
+            timingsProvider,
+            RECEIVED_FRAMES_AS_KEEP_ALIVE_COUNT,
+            errorConsumer);
   }
 
   @Test
@@ -125,7 +133,7 @@ public class KeepAliveTest {
     clientConnection.acceptResumeState(resumeStateHolder);
 
     clientConnection.sendOne(setupFrame()).subscribe();
-    clientConnection.receive().subscribe();
+    clientConnection.receive().subscribe(ReferenceCountUtil::safeRelease);
 
     testConnection.addToReceivedBuffer(keepAliveFrame(false, 1));
     testConnection.addToReceivedBuffer(keepAliveFrame(false, 2));
@@ -150,13 +158,50 @@ public class KeepAliveTest {
   }
 
   @Test
+  void clientReceiveFramesCountIsAlive() {
+    clientConnection.sendOne(setupFrame()).subscribe();
+    clientConnection.receive().subscribe(ReferenceCountUtil::safeRelease);
+    Mono.delay(Duration.ofMillis(500)).block();
+    testConnection.addToReceivedBuffer(payloadFrame());
+    testConnection.addToReceivedBuffer(payloadFrame());
+    testConnection.addToReceivedBuffer(payloadFrame());
+    Mono.delay(Duration.ofMillis(500)).block();
+    Assertions.assertThat(errors).hasSize(0);
+    Assertions.assertThat(clientConnection.isDisposed()).isFalse();
+
+    testConnection.getSent().forEach(ReferenceCountUtil::safeRelease);
+  }
+
+  @Test
+  void clientReceiveFramesLessThanCountIsClosed() {
+    clientConnection.sendOne(setupFrame()).subscribe();
+    clientConnection.receive().subscribe(ReferenceCountUtil::safeRelease);
+    testConnection.addToReceivedBuffer(payloadFrame());
+    Mono.delay(Duration.ofSeconds(1)).block();
+    Assertions.assertThat(errors).hasSize(1);
+    Assertions.assertThat(clientConnection.isDisposed()).isTrue();
+  }
+
+  @Test
+  void clientReceiveFramesAsKeepAliveDisabled() {
+    clientConnection =
+        KeepAliveConnection.ofClient(allocator, testConnection, timingsProvider, 0, errorConsumer);
+    clientConnection.sendOne(setupFrame()).subscribe();
+    clientConnection.receive().subscribe(ReferenceCountUtil::safeRelease);
+    testConnection.addToReceivedBuffer(payloadFrame());
+    Mono.delay(Duration.ofSeconds(1)).block();
+    Assertions.assertThat(errors).hasSize(1);
+    Assertions.assertThat(clientConnection.isDisposed()).isTrue();
+  }
+
+  @Test
   void serverFrames() {
     serverConnection.sendOne(setupFrame()).subscribe();
     serverConnection.receive().subscribe();
     testConnection.addToReceivedBuffer(keepAliveFrame(true, 0));
 
     Assertions.assertThat(errors).isEmpty();
-    Assertions.assertThat(clientConnection.isDisposed()).isFalse();
+    Assertions.assertThat(serverConnection.isDisposed()).isFalse();
 
     Collection<ByteBuf> sent = testConnection.getSent();
     Collection<ByteBuf> sentAfterSetup =
@@ -183,9 +228,43 @@ public class KeepAliveTest {
     Throwable err = errors.get(0);
     Assertions.assertThat(err).isExactlyInstanceOf(ConnectionErrorException.class);
     Assertions.assertThat(err.getMessage()).isEqualTo("No keep-alive acks for 700 ms");
-    Assertions.assertThat(clientConnection.isDisposed()).isTrue();
+    Assertions.assertThat(serverConnection.isDisposed()).isTrue();
 
     testConnection.getSent().forEach(ReferenceCountUtil::safeRelease);
+  }
+
+  @Test
+  void serverReceiveFramesCountIsAlive() {
+    serverConnection.receive().subscribe();
+    testConnection.addToReceivedBuffer(setupFrame());
+    Mono.delay(Duration.ofMillis(500)).block();
+    testConnection.addToReceivedBuffer(payloadFrame());
+    testConnection.addToReceivedBuffer(payloadFrame());
+    Mono.delay(Duration.ofMillis(500)).block();
+    Assertions.assertThat(errors).hasSize(0);
+    Assertions.assertThat(clientConnection.isDisposed()).isFalse();
+  }
+
+  @Test
+  void serverReceiveFramesLessThanCountIsClosed() {
+    serverConnection.receive().subscribe();
+    testConnection.addToReceivedBuffer(setupFrame());
+    testConnection.addToReceivedBuffer(payloadFrame());
+    Mono.delay(Duration.ofSeconds(1)).block();
+    Assertions.assertThat(errors).hasSize(1);
+    Assertions.assertThat(serverConnection.isDisposed()).isTrue();
+  }
+
+  @Test
+  void serverReceiveFramesAsKeepAliveDisabled() {
+    serverConnection =
+        KeepAliveConnection.ofServer(allocator, testConnection, timingsProvider, 0, errorConsumer);
+    serverConnection.receive().subscribe();
+    testConnection.addToReceivedBuffer(setupFrame());
+    testConnection.addToReceivedBuffer(payloadFrame());
+    Mono.delay(Duration.ofSeconds(1)).block();
+    Assertions.assertThat(errors).hasSize(1);
+    Assertions.assertThat(serverConnection.isDisposed()).isTrue();
   }
 
   private ByteBuf keepAliveFrame(boolean respond, int pos) {
@@ -202,6 +281,11 @@ public class KeepAliveTest {
         "dataType",
         byteBuf("metadata"),
         byteBuf("data"));
+  }
+
+  private ByteBuf payloadFrame() {
+    return PayloadFrameFlyweight.encode(
+        allocator, 1, false, true, true, byteBuf("metadata"), byteBuf("data"));
   }
 
   private ByteBuf byteBuf(String msg) {

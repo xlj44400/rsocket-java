@@ -58,7 +58,7 @@ abstract class KeepAliveHandler implements Disposable {
   }
 
   public void start() {
-    this.lastReceivedMillis = System.currentTimeMillis();
+    updateLastReceived();
     intervalDisposable.compareAndSet(
         null, Flux.interval(keepAlivePeriod).subscribe(v -> onIntervalTick()));
   }
@@ -73,8 +73,12 @@ abstract class KeepAliveHandler implements Disposable {
     timeout.onComplete();
   }
 
+  public void receive() {
+    updateLastReceived();
+  }
+
   public long receive(ByteBuf keepAliveFrame) {
-    this.lastReceivedMillis = System.currentTimeMillis();
+    updateLastReceived();
     long remoteLastReceivedPos = KeepAliveFrameFlyweight.lastPosition(keepAliveFrame);
     if (KeepAliveFrameFlyweight.respondFlag(keepAliveFrame)) {
       long localLastReceivedPos = obtainLastReceivedPos();
@@ -101,6 +105,10 @@ abstract class KeepAliveHandler implements Disposable {
   }
 
   abstract void onIntervalTick();
+
+  void updateLastReceived() {
+    this.lastReceivedMillis = System.currentTimeMillis();
+  }
 
   void doSend(ByteBuf frame) {
     sent.onNext(frame);
