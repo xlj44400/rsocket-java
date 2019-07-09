@@ -11,6 +11,7 @@ import io.rsocket.frame.ErrorFrameFlyweight;
 import io.rsocket.frame.FrameHeaderFlyweight;
 import io.rsocket.frame.FrameType;
 import io.rsocket.frame.SetupFrameFlyweight;
+import io.rsocket.lease.RequesterLeaseHandler;
 import io.rsocket.test.util.TestDuplexConnection;
 import io.rsocket.transport.ServerTransport;
 import io.rsocket.util.DefaultPayload;
@@ -49,13 +50,17 @@ public class SetupRejectionTest {
   void requesterStreamsTerminatedOnZeroErrorFrame() {
     TestDuplexConnection conn = new TestDuplexConnection();
     List<Throwable> errors = new ArrayList<>();
-    RSocketClient rSocket =
-        new RSocketClient(
+    RSocketRequester rSocket =
+        new RSocketRequester(
             ByteBufAllocator.DEFAULT,
             conn,
             DefaultPayload::create,
             errors::add,
-            StreamIdSupplier.clientSupplier());
+            StreamIdSupplier.clientSupplier(),
+            0,
+            0,
+            null,
+            RequesterLeaseHandler.None);
 
     String errorMsg = "error";
 
@@ -79,13 +84,17 @@ public class SetupRejectionTest {
   @Test
   void requesterNewStreamsTerminatedAfterZeroErrorFrame() {
     TestDuplexConnection conn = new TestDuplexConnection();
-    RSocketClient rSocket =
-        new RSocketClient(
+    RSocketRequester rSocket =
+        new RSocketRequester(
             ByteBufAllocator.DEFAULT,
             conn,
             DefaultPayload::create,
             err -> {},
-            StreamIdSupplier.clientSupplier());
+            StreamIdSupplier.clientSupplier(),
+            0,
+            0,
+            null,
+            RequesterLeaseHandler.None);
 
     conn.addToReceivedBuffer(
         ErrorFrameFlyweight.encode(

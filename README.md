@@ -15,7 +15,7 @@ Learn more at http://rsocket.io
 
 ## Build and Binaries
 
-[![Build Status](https://travis-ci.org/rsocket/rsocket-java.svg?branch=1.0.x)](https://travis-ci.org/rsocket/rsocket-java)
+[![Build Status](https://travis-ci.org/rsocket/rsocket-java.svg?branch=develop)](https://travis-ci.org/rsocket/rsocket-java)
 
 Releases are available via Maven Central.
 
@@ -23,10 +23,10 @@ Example:
 
 ```groovy
 dependencies {
-    implementation 'io.rsocket:rsocket-core:0.12.2-RC2'
-    implementation 'io.rsocket:rsocket-transport-netty:0.12.2-RC2'
-//    implementation 'io.rsocket:rsocket-core:0.12.2-RC3-SNAPSHOT'
-//    implementation 'io.rsocket:rsocket-transport-netty:0.12.2-RC3-SNAPSHOT'
+    implementation 'io.rsocket:rsocket-core:0.12.2-RC4'
+    implementation 'io.rsocket:rsocket-transport-netty:0.12.2-RC4'
+//    implementation 'io.rsocket:rsocket-core:1.0.0-RC1-SNAPSHOT'
+//    implementation 'io.rsocket:rsocket-transport-netty:1.0.0-RC1-SNAPSHOT'
 }
 ```
 

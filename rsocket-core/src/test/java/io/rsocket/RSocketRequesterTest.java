@@ -28,15 +28,14 @@ import io.netty.buffer.ByteBufAllocator;
 import io.rsocket.exceptions.ApplicationErrorException;
 import io.rsocket.exceptions.RejectedSetupException;
 import io.rsocket.frame.*;
-import io.rsocket.test.util.TestDuplexConnection;
+import io.rsocket.lease.RequesterLeaseHandler;
 import io.rsocket.test.util.TestSubscriber;
 import io.rsocket.util.DefaultPayload;
 import io.rsocket.util.EmptyPayload;
+import io.rsocket.util.MultiSubscriberRSocket;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Queue;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.stream.Collectors;
 import org.assertj.core.api.Assertions;
 import org.junit.Rule;
@@ -50,7 +49,7 @@ import reactor.core.publisher.Mono;
 import reactor.core.publisher.MonoProcessor;
 import reactor.core.publisher.UnicastProcessor;
 
-public class RSocketClientTest {
+public class RSocketRequesterTest {
 
   @Rule public final ClientSocketRule rule = new ClientSocketRule();
 
@@ -175,7 +174,8 @@ public class RSocketClientTest {
 
   @Test(timeout = 2_000)
   public void testLazyRequestResponse() {
-    Publisher<Payload> response = rule.socket.requestResponse(EmptyPayload.INSTANCE);
+    Publisher<Payload> response =
+        new MultiSubscriberRSocket(rule.socket).requestResponse(EmptyPayload.INSTANCE);
     int streamId = sendRequestResponse(response);
     rule.connection.clearSendReceiveBuffers();
     int streamId2 = sendRequestResponse(response);
@@ -214,32 +214,6 @@ public class RSocketClientTest {
     Assertions.assertThat(request.isDisposed()).isTrue();
   }
 
-  @Test(timeout = 2_000)
-  @SuppressWarnings("unchecked")
-  public void
-      testClientSideRequestChannelShouldNotHangInfinitelySendingElementsAndShouldProduceDataValuingConnectionBackpressure() {
-    final Queue<Long> requests = new ConcurrentLinkedQueue<>();
-    rule.connection.dispose();
-    rule.connection = new TestDuplexConnection();
-    rule.connection.setInitialSendRequestN(256);
-    rule.init();
-
-    rule.socket
-        .requestChannel(
-            Flux.<Payload>generate(s -> s.next(EmptyPayload.INSTANCE)).doOnRequest(requests::add))
-        .subscribe();
-
-    int streamId = rule.getStreamIdForRequestType(REQUEST_CHANNEL);
-
-    assertThat("Unexpected error.", rule.errors, is(empty()));
-
-    rule.connection.addToReceivedBuffer(
-        RequestNFrameFlyweight.encode(ByteBufAllocator.DEFAULT, streamId, 2));
-    rule.connection.addToReceivedBuffer(
-        RequestNFrameFlyweight.encode(ByteBufAllocator.DEFAULT, streamId, Integer.MAX_VALUE));
-    Assertions.assertThat(requests).containsOnly(1L, 2L, 253L);
-  }
-
   public int sendRequestResponse(Publisher<Payload> response) {
     Subscriber<Payload> sub = TestSubscriber.create();
     response.subscribe(sub);
@@ -252,15 +226,19 @@ public class RSocketClientTest {
     return streamId;
   }
 
-  public static class ClientSocketRule extends AbstractSocketRule<RSocketClient> {
+  public static class ClientSocketRule extends AbstractSocketRule<RSocketRequester> {
     @Override
-    protected RSocketClient newRSocket() {
-      return new RSocketClient(
+    protected RSocketRequester newRSocket() {
+      return new RSocketRequester(
           ByteBufAllocator.DEFAULT,
           connection,
           DefaultPayload::create,
           throwable -> errors.add(throwable),
-          StreamIdSupplier.clientSupplier());
+          StreamIdSupplier.clientSupplier(),
+          0,
+          0,
+          null,
+          RequesterLeaseHandler.None);
     }
 
     public int getStreamIdForRequestType(FrameType expectedFrameType) {
